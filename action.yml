@@ -7,15 +7,18 @@ branding:
 inputs:
   app-path:
     description: 'Path of the software to notarize. Globbing is supported'
-    requires: true
+    required: true
   staple:
     description: 'Whether to run `stapler staple`'
-    requires: true
+    required: true
     default: 'true'
   keychain-profile:
     description: 'notarytool --keychain-profile parameter'
     required: true
     default: 'notary'
+  zip-file-path:
+    description: 'Path to zip file to be notarized'
+    required: true
   apple-id:
     description: 'notarytool --apple-id parameter'
     required: true
@@ -28,11 +31,26 @@ inputs:
   xcode-path:
     description: 'Path of the Xcode version to use'
     required: true
-    default: '/Applications/Xcode_13.2.app' # available on both macos-11 and macos-12 environments
+    default: '/Applications/Xcode.app' # available on both macos-11 and macos-12 environments
+  app-title:
+    description: 'Path to zip file to be notarized'
+    required: true
+  dmg-file-name:
+    description: 'Path to zip file to be notarized'
+    required: true
+  dmg-background:
+    description: 'Path to zip file to be notarized'
+    required: true
+  dmg-icon:
+    description: 'Path to zip file to be notarized'
+    required: true
 
+  #${{ secrets.AWS_ACCESS_KEY_ID }}
+  # ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 runs:
   using: 'composite'
   steps:
+
     - name: Setup Xcode
       run: sudo xcode-select -s ${{ inputs.xcode-path }}
       shell: bash
@@ -47,11 +65,35 @@ runs:
         # import credentials from secrets
         xcrun notarytool store-credentials "${{ inputs.keychain-profile }}" --apple-id "${{ inputs.apple-id }}" --password "${{ inputs.password }}" --team-id "${{ inputs.team-id }}" --keychain "${KEYCHAIN_PATH}"
       shell: bash
-    - name: Notarize ${{ inputs.app-path }}
+    - name: Notarize ${{ inputs.zip-file-path }}
       run: |
         KEYCHAIN_PATH=$RUNNER_TEMP/notarization.keychain-db
+        APP_FOLDER_PATH=$RUNNER_TEMP/$(basename ${{ inputs.zip-file-path }})
+        xcrun notarytool submit ${{ inputs.zip-file-path }} --keychain-profile "${{ inputs.keychain-profile }}" --keychain "${KEYCHAIN_PATH}" --wait
+        ditto -x -k --sequesterRsrc --rsrc "${{ inputs.zip-file-path }}"  "${APP_FOLDER_PATH}"
+        DOT_APP_FOLDER= ${APP_FOLDER_PATH}/${{ inputs.app-title }}.app
+        xcrun stapler staple ${DOT_APP_FOLDER}
         xcrun notarytool submit ${{ inputs.app-path }} --keychain-profile "${{ inputs.keychain-profile }}" --keychain "${KEYCHAIN_PATH}" --wait
+        cat <<EOF > $RUNNER_TEMP/DmgSpecs.json
+        {
+          "title": "${{ inputs.app-title }}",
+          "background": "${{ inputs.dmg-background }},
+          "icon": "${DOT_APP_FOLDER}/Contents/Resources/${{ inputs.dmg-icon }}",
+          "icon-size": 150,
+          "contents": [
+            { "x": 445, "y": 186, "type": "link", "path": "/Applications" },
+            { "x": 135, "y": 186, "type": "file", "path": "${DOT_APP_FOLDER}" }
+          ]
+        }
+        EOF
       shell: bash
+
+    - name: Create DMG ${{ inputs.dmg-file-name }}
+      run: |
+        appdmg "$RUNNER_TEMP/DmgSpecs.json"  "$RUNNER_TEMP/${{ inputs.dmg-file-name }}"
+        #bash -x build/macos/build-create-keychain2.sh
+      shell: bash
+
     - name: Staple
       if: ${{ inputs.staple == 'true' }}
       run: xcrun stapler staple ${{ inputs.app-path }}
